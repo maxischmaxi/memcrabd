@@ -1,13 +1,14 @@
-pub mod item;
-
-pub use item::Item;
-
 use std::{
     collections::HashMap,
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
 use tokio::{sync::RwLock, time::Instant};
+use tracing::instrument;
+
+pub mod item;
+
+pub use item::Item;
 
 pub struct Store {
     items: RwLock<HashMap<String, Item>>,
@@ -22,6 +23,7 @@ impl Store {
         }
     }
 
+    #[instrument(skip(self), level = "trace")]
     pub async fn set(&self, key: String, flags: u32, ttl: u64, value: Vec<u8>) {
         let expires_at = if ttl == 0 {
             None
@@ -36,6 +38,7 @@ impl Store {
         self.items.write().await.insert(key, item);
     }
 
+    #[instrument(skip(self), level = "trace")]
     pub async fn get(&self, key: &str) -> Option<Item> {
         let mut items = self.items.write().await;
 
@@ -44,6 +47,7 @@ impl Store {
         if let Some(expires_at) = item.expires_at
             && Instant::now() >= expires_at
         {
+            tracing::trace!(%key, "item expired, removing");
             items.remove(key);
             return None;
         }
@@ -51,8 +55,8 @@ impl Store {
         Some(item.clone())
     }
 
+    #[instrument(skip(self), level = "trace")]
     pub async fn delete(&self, key: &str) -> bool {
         self.items.write().await.remove(key).is_some()
     }
 }
-
