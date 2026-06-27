@@ -1,28 +1,46 @@
 pub mod bind;
 pub mod command;
-pub mod connection;
 pub mod conns;
-pub mod frame;
 pub mod port;
 
-pub use connection::{handle_command, handle_set_data};
-pub use frame::{Frame, parse_frame};
+use crate::protocol::text::find_crlf;
+use crate::server::command::{Command, parse_command_line};
 
 use anyhow::{Context, Result};
-use bytes::BytesMut;
+use bytes::{Buf, BytesMut};
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
 };
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, UdpSocket, UnixListener},
 };
 
 use crate::{
-    server::bind::{InterfaceResolver, SystemResolver, parse_listen},
+    server::{
+        bind::{InterfaceResolver, SystemResolver, parse_listen},
+        conns::{handle_command, handle_set_data},
+    },
     store::Store,
 };
+
+pub enum Frame {
+    Command(Command),
+    SetData { command: Command, value: Vec<u8> },
+    ServerError(String),
+}
+
+#[derive(Clone)]
+pub struct ParseConfig {
+    pub max_item_size: u64,
+}
+
+impl ParseConfig {
+    pub fn new(max_item_size: u64) -> Self {
+        Self { max_item_size }
+    }
+}
 
 pub enum Listener {
     Tcp(TcpListener),
@@ -111,7 +129,11 @@ pub async fn get_listeners(ifaces: Vec<String>, port: u16, udp: bool) -> Result<
     Ok(listeners)
 }
 
-pub async fn handle_connection<S>(mut stream: S, store: Arc<Store>) -> Result<()>
+pub async fn handle_connection<S>(
+    mut stream: S,
+    store: Arc<Store>,
+    config: &ParseConfig,
+) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -124,7 +146,7 @@ where
             return Ok(());
         }
 
-        while let Some(frame) = parse_frame(&mut read_buf)? {
+        while let Some(frame) = parse_frame(&mut read_buf, config)? {
             match frame {
                 Frame::Command(command) => {
                     let should_continue = handle_command(command, &mut stream, &store).await?;
@@ -141,7 +163,62 @@ where
                         return Ok(());
                     }
                 }
+                Frame::ServerError(message) => {
+                    stream
+                        .write_all(format!("{message}\r\n").as_bytes())
+                        .await?;
+                }
             }
+        }
+    }
+}
+
+pub fn parse_frame(buf: &mut BytesMut, config: &ParseConfig) -> Result<Option<Frame>> {
+    let Some(line_end) = find_crlf(buf) else {
+        return Ok(None);
+    };
+
+    let line = &buf[..line_end];
+    let line_str = std::str::from_utf8(line)?;
+
+    let command = parse_command_line(line_str)?;
+
+    match command {
+        Command::Set { bytes, .. } => {
+            let header_len = line_end + 2;
+            let total_len = header_len + bytes + 2;
+
+            if u64::try_from(bytes).unwrap_or(u64::MAX) > config.max_item_size {
+                if buf.len() < total_len {
+                    return Ok(None);
+                }
+
+                buf.advance(total_len);
+
+                return Ok(Some(Frame::ServerError(
+                    "SERVER_ERROR object too large for cache".into(),
+                )));
+            }
+
+            if buf.len() < total_len {
+                return Ok(None);
+            }
+
+            let value = buf[..bytes].to_vec();
+
+            buf.advance(bytes);
+
+            if &buf[..2] != b"\r\n" {
+                anyhow::bail!("expected CRLF after set data");
+            }
+
+            buf.advance(2);
+            Ok(Some(Frame::SetData { command, value }))
+        }
+
+        _ => {
+            buf.advance(line_end + 2);
+            Ok(Some(Frame::Command(command)))
         }
     }
 }

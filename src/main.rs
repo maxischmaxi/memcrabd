@@ -1,73 +1,30 @@
 use anyhow::Result;
+use clap::Parser;
 use std::sync::Arc;
 use tracing::Instrument;
 
-use clap::Parser;
-
 use memcrabd::{
+    args::Args,
     server::{
-        self, Listener,
+        self, Listener, ParseConfig,
         conns::{Accept, ConnectionLimiter},
         create_unix_listener, get_listeners,
-        port::port_in_range,
     },
     store::Store,
 };
 
-#[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
-struct Args {
-    #[arg(short = 'U', long = "udp", default_value_t = false)]
-    udp: bool,
-
-    #[arg(short = 'l', long = "listen")]
-    listen_interface: Vec<String>,
-
-    #[arg(short = 's', long = "unix-socket")]
-    unix_socket: Option<String>,
-
-    #[arg(short = 'a', long = "unix-socket-perm", default_value_t = 0o700)]
-    unix_socket_perm: u16,
-
-    #[arg(short = 'p', long = "port", default_value_t = 11211, value_parser = port_in_range)]
-    port: u16,
-
-    #[arg(short = 'm', long = "memory", default_value_t = 0)]
-    memory: u64,
-
-    #[arg(short = 'M', long = "memory-eviction", default_value_t = false)]
-    memory_eviction: bool,
-
-    #[arg(short = 'I', long = "max-item-size", default_value_t = 0)]
-    max_item_size: u64,
-
-    #[arg(short = 'c', long = "max-connections", default_value_t = 1024)]
-    max_connections: u64,
-
-    #[arg(long = "maxconns-fast", default_value_t = false)]
-    maxconns_fast: bool,
-
-    #[arg(short = 't', long = "threads", default_value_t = 4)]
-    threads: u64,
-
-    #[arg(short = 'd', long = "daemonize", default_value_t = false)]
-    daemonize: bool,
-
-    #[arg(short = 'u', long = "user", default_value = "")]
-    user: String,
-
-    #[arg(short = 'r', long = "core-dump", default_value_t = false)]
-    core_dump: bool,
-
-    #[arg(short = 'k', long = "lock-all-memory", default_value_t = false)]
-    lock_all_memory: bool,
-
-    #[arg(short = 'C', long = "cas-disable", default_value_t = false)]
-    cas_disable: bool,
-}
-
 fn main() -> Result<()> {
     let args = Args::parse();
+
+    if args.max_item_size < 1024 {
+        eprintln!("Item max size cannot be less than 1024 bytes.");
+        std::process::exit(1);
+    }
+
+    if args.max_item_size > 1024 * 1024 * 1024 {
+        eprintln!("Cannot set item size limit higher than a gigabyte.");
+        std::process::exit(1);
+    }
 
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(args.threads.max(1) as usize)
@@ -105,16 +62,20 @@ fn main() -> Result<()> {
                 std::process::exit(1);
             }
 
+            let config = ParseConfig::new(args.max_item_size);
+
             for listener in listeners {
                 let store = store.clone();
                 let limiter = limiter.clone();
+                let config = config.clone();
 
                 tracing::info!("listening on {listener}");
 
                 tokio::spawn(async move {
                     match listener {
                         Listener::Tcp(tcp) => {
-                            accept_loop(tcp, store, limiter, |addr| addr.to_string()).await;
+                            accept_loop(tcp, store, limiter, |addr| addr.to_string(), &config)
+                                .await;
                         }
 
                         Listener::Udp(_socket) => {
@@ -123,7 +84,7 @@ fn main() -> Result<()> {
                         }
 
                         Listener::Unix(unix) => {
-                            accept_loop(unix, store, limiter, |_| String::new()).await;
+                            accept_loop(unix, store, limiter, |_| String::new(), &config).await;
                         }
                     }
                 });
@@ -146,6 +107,7 @@ async fn accept_loop<L, F>(
     store: Arc<Store>,
     limiter: Arc<ConnectionLimiter>,
     addr_fmt: F,
+    config: &ParseConfig,
 ) where
     L: Accept,
     F: Fn(L::Addr) -> String,
@@ -173,13 +135,14 @@ async fn accept_loop<L, F>(
         tracing::info!(addr = %addr_str, "client connected");
 
         let store = store.clone();
+        let config = config.clone();
         let span = tracing::info_span!("conn", addr = %addr_str);
 
         tokio::spawn(
             async move {
                 let _guard = guard;
 
-                let result = server::handle_connection(stream, store).await;
+                let result = server::handle_connection(stream, store, &config).await;
 
                 if let Err(err) = result {
                     tracing::warn!(addr = %addr_str, error = %err, "connection error");
