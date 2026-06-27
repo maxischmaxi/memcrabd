@@ -1,18 +1,22 @@
 use anyhow::Result;
 use std::sync::Arc;
-use tokio::{io::AsyncWriteExt, net::TcpStream};
+use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::instrument;
 
 use crate::server::command::Command;
 use crate::store::Store;
 
 #[instrument(skip(stream, store), ret, level = "debug")]
-pub async fn handle_set_data(
+pub async fn handle_set_data<S>(
     command: Command,
     value: Vec<u8>,
-    stream: &mut TcpStream,
+    stream: &mut S,
     store: &Arc<Store>,
-) -> Result<bool> {
+) -> Result<bool>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     match command {
         Command::Set {
             key,
@@ -40,11 +44,10 @@ pub async fn handle_set_data(
 }
 
 #[instrument(skip(stream, store), ret, level = "debug")]
-pub async fn handle_command(
-    command: Command,
-    stream: &mut TcpStream,
-    store: &Arc<Store>,
-) -> Result<bool> {
+pub async fn handle_command<S>(command: Command, stream: &mut S, store: &Arc<Store>) -> Result<bool>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     match command {
         Command::Get { keys } => {
             tracing::debug!(key_count = keys.len(), "get request");
@@ -104,3 +107,4 @@ pub async fn handle_command(
 
     Ok(true)
 }
+

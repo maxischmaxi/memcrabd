@@ -6,14 +6,8 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.103"
 bytes = "1.12.0"
+clap = { version = "4.6.1", features = ["derive"]}
+getifs = "0.6.1"
 tokio = { version = "1.52.3", features = ["full"] }
-
-# Logging / Tracing
-# - `tracing`:         die Macros (info!, debug!, span!, #[instrument])
-# - `tracing-subscriber`: der "Backend"-Layer (fmt-Ausgabe, Filter, JSON)
-#   features:
-#     fmt        = menschenlesbare Konsolen-Ausgabe
-#     env-filter = RUST_LOG env var + programmatisches Filter
-#     json       = JSON-Ausgabe-Format für Produktion
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "json"] }
