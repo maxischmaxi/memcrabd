@@ -26,6 +26,14 @@ fn main() -> Result<()> {
         std::process::exit(1);
     }
 
+    if args.daemonize {
+        memcrabd::daemon::daemonize(false, false)?;
+    }
+
+    if let Some(pid_path) = &args.pid_file {
+        memcrabd::daemon::save_pid(pid_path)?;
+    }
+
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(args.threads.max(1) as usize)
         .enable_all()
@@ -91,6 +99,12 @@ fn main() -> Result<()> {
             }
 
             tokio::signal::ctrl_c().await?;
+
+            if let Some(pid_path) = &args.pid_file
+                && let Err(e) = memcrabd::daemon::remove_pid(pid_path)
+            {
+                tracing::warn!(error = %e, "failed to remove pid file");
+            }
 
             let delete_unix_socket_path = args.unix_socket.clone();
             if let Some(delete_path) = delete_unix_socket_path {

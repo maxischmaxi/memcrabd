@@ -42,6 +42,9 @@ pub struct Args {
     #[arg(short = 'd', long = "daemonize", default_value_t = false)]
     pub daemonize: bool,
 
+    #[arg(short = 'P', long = "pidfile")]
+    pub pid_file: Option<String>,
+
     #[arg(short = 'u', long = "user", default_value = "")]
     pub user: String,
 
