@@ -23,4 +23,3 @@ async fn test_resolve_returns_fake_ips() {
     let expected: IpAddr = "127.0.0.1".parse().unwrap();
     assert_eq!(result, vec![expected]);
 }
-

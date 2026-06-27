@@ -27,7 +27,7 @@ where
         } => {
             tracing::debug!(%key, flags, ttl, bytes = value.len(), "storing item");
 
-            store.set(key, flags, ttl, value).await;
+            store.set(key, flags, ttl, value);
 
             if !noreply {
                 stream.write_all(b"STORED\r\n").await?;
@@ -53,7 +53,7 @@ where
             tracing::debug!(key_count = keys.len(), "get request");
 
             for key in keys {
-                if let Some(item) = store.get(&key).await {
+                if let Some(item) = store.get(&key) {
                     tracing::debug!(%key, flags = item.flags, bytes = item.value.len(), "cache hit");
 
                     stream
@@ -74,7 +74,7 @@ where
         }
 
         Command::Delete { key, noreply } => {
-            let deleted = store.delete(&key).await;
+            let deleted = store.delete(&key);
 
             tracing::debug!(%key, deleted, "delete");
 
@@ -107,4 +107,3 @@ where
 
     Ok(true)
 }
-

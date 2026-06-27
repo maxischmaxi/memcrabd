@@ -47,7 +47,7 @@ struct Args {
     #[arg(long = "maxconns-fast", default_value_t = false)]
     maxconns_fast: bool,
 
-    #[arg(short = 't', long = "threads", default_value_t = 1)]
+    #[arg(short = 't', long = "threads", default_value_t = 4)]
     threads: u64,
 
     #[arg(short = 'd', long = "daemonize", default_value_t = false)]
@@ -66,73 +66,79 @@ struct Args {
     cas_disable: bool,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let args = Args::parse();
 
-    memcrabd::log::init(memcrabd::log::Verbosity(1), memcrabd::log::LogFormat::Human);
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(args.threads.max(1) as usize)
+        .enable_all()
+        .build()?
+        .block_on(async {
+            memcrabd::log::init(memcrabd::log::Verbosity(1), memcrabd::log::LogFormat::Human);
+            let store = Arc::new(Store::new());
 
-    let store = Arc::new(Store::new());
+            let limiter = Arc::new(ConnectionLimiter::new(
+                args.max_connections,
+                args.maxconns_fast,
+            ));
 
-    let limiter = Arc::new(ConnectionLimiter::new(
-        args.max_connections,
-        args.maxconns_fast,
-    ));
+            let unix_socket_arg = args.unix_socket.clone();
+            let listeners: Vec<Listener> = if let Some(path) = unix_socket_arg {
+                let Ok(unix_listener) = create_unix_listener(&path, args.unix_socket_perm).await
+                else {
+                    tracing::error!("failed to create unix listener");
+                    std::process::exit(1);
+                };
+                vec![unix_listener]
+            } else {
+                let Ok(tcp_udp_listeners) =
+                    get_listeners(args.listen_interface, args.port, args.udp).await
+                else {
+                    tracing::error!("failed to create listeners");
+                    std::process::exit(1);
+                };
+                tcp_udp_listeners
+            };
 
-    let unix_socket_arg = args.unix_socket.clone();
-    let listeners: Vec<Listener> = if let Some(path) = unix_socket_arg {
-        let Ok(unix_listener) = create_unix_listener(&path, args.unix_socket_perm).await else {
-            tracing::error!("failed to create unix listener");
-            std::process::exit(1);
-        };
-        vec![unix_listener]
-    } else {
-        let Ok(tcp_udp_listeners) = get_listeners(args.listen_interface, args.port, args.udp).await
-        else {
-            tracing::error!("failed to create listeners");
-            std::process::exit(1);
-        };
-        tcp_udp_listeners
-    };
-
-    if listeners.is_empty() {
-        tracing::error!("failed to start server, no interfaces found");
-        std::process::exit(1);
-    }
-
-    for listener in listeners {
-        let store = store.clone();
-        let limiter = limiter.clone();
-
-        tracing::info!("listening on {listener}");
-
-        tokio::spawn(async move {
-            match listener {
-                Listener::Tcp(tcp) => {
-                    accept_loop(tcp, store, limiter, |addr| addr.to_string()).await;
-                }
-
-                Listener::Udp(_socket) => {
-                    // UDP ist verbindungslos – kein Connection-Tracking
-                    // später: UDP-Handler
-                }
-
-                Listener::Unix(unix) => {
-                    accept_loop(unix, store, limiter, |_| String::new()).await;
-                }
+            if listeners.is_empty() {
+                tracing::error!("failed to start server, no interfaces found");
+                std::process::exit(1);
             }
-        });
-    }
 
-    tokio::signal::ctrl_c().await?;
+            for listener in listeners {
+                let store = store.clone();
+                let limiter = limiter.clone();
 
-    let delete_unix_socket_path = args.unix_socket.clone();
-    if let Some(delete_path) = delete_unix_socket_path {
-        let _ = std::fs::remove_file(&delete_path);
-        tracing::info!("removed unix socket {delete_path}");
-    }
+                tracing::info!("listening on {listener}");
 
-    Ok(())
+                tokio::spawn(async move {
+                    match listener {
+                        Listener::Tcp(tcp) => {
+                            accept_loop(tcp, store, limiter, |addr| addr.to_string()).await;
+                        }
+
+                        Listener::Udp(_socket) => {
+                            // UDP ist verbindungslos – kein Connection-Tracking
+                            // später: UDP-Handler
+                        }
+
+                        Listener::Unix(unix) => {
+                            accept_loop(unix, store, limiter, |_| String::new()).await;
+                        }
+                    }
+                });
+            }
+
+            tokio::signal::ctrl_c().await?;
+
+            let delete_unix_socket_path = args.unix_socket.clone();
+            if let Some(delete_path) = delete_unix_socket_path {
+                let _ = std::fs::remove_file(&delete_path);
+                tracing::info!("removed unix socket {delete_path}");
+            }
+
+            Ok(())
+        })
 }
 
 async fn accept_loop<L, F>(

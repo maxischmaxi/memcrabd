@@ -24,7 +24,8 @@ impl std::fmt::Display for BindTarget {
 }
 
 pub trait InterfaceResolver {
-    async fn resolve(&self, target: &BindTarget) -> Vec<IpAddr>;
+    fn resolve(&self, target: &BindTarget)
+    -> impl std::future::Future<Output = Vec<IpAddr>> + Send;
 }
 
 pub struct SystemResolver;
