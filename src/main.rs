@@ -26,6 +26,17 @@ fn main() -> Result<()> {
         std::process::exit(1);
     }
 
+    if !args.user.is_empty() {
+        memcrabd::daemon::drop_privileges(&args.user)?;
+    } else if args.daemonize {
+        let uid = nix::unistd::getuid();
+        let euid = nix::unistd::geteuid();
+        if uid.as_raw() == 0 || euid.as_raw() == 0 {
+            eprintln!("must add '-u root' to start as root");
+            std::process::exit(1);
+        }
+    }
+
     if args.daemonize {
         memcrabd::daemon::daemonize(false, false)?;
     }
