@@ -3,6 +3,10 @@ name = "memcrabd"
 version = "0.1.0"
 edition = "2024"
 
+[dev-dependencies]
+tempfile = "3.27.0"
+tokio = { version = "1.52.3", features = ["full"] }
+
 [dependencies]
 anyhow = "1.0.103"
 bytes = "1.12.0"

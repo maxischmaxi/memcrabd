@@ -1,17 +1,18 @@
-mod log;
-mod protocol;
-mod server;
-mod store;
-
 use anyhow::Result;
 use std::sync::Arc;
 use tracing::Instrument;
 
-use store::Store;
-
 use clap::Parser;
 
-use crate::server::{Listener, create_unix_listener, get_listeners, port::port_in_range};
+use memcrabd::{
+    server::{
+        self, Listener,
+        conns::{Accept, ConnectionLimiter},
+        create_unix_listener, get_listeners,
+        port::port_in_range,
+    },
+    store::Store,
+};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -40,8 +41,11 @@ struct Args {
     #[arg(short = 'I', long = "max-item-size", default_value_t = 0)]
     max_item_size: u64,
 
-    #[arg(short = 'c', long = "max-connections", default_value_t = 0)]
+    #[arg(short = 'c', long = "max-connections", default_value_t = 1024)]
     max_connections: u64,
+
+    #[arg(long = "maxconns-fast", default_value_t = false)]
+    maxconns_fast: bool,
 
     #[arg(short = 't', long = "threads", default_value_t = 1)]
     threads: u64,
@@ -66,9 +70,14 @@ struct Args {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    log::init(log::Verbosity(1), log::LogFormat::Human);
+    memcrabd::log::init(memcrabd::log::Verbosity(1), memcrabd::log::LogFormat::Human);
 
     let store = Arc::new(Store::new());
+
+    let limiter = Arc::new(ConnectionLimiter::new(
+        args.max_connections,
+        args.maxconns_fast,
+    ));
 
     let unix_socket_arg = args.unix_socket.clone();
     let listeners: Vec<Listener> = if let Some(path) = unix_socket_arg {
@@ -93,57 +102,23 @@ async fn main() -> Result<()> {
 
     for listener in listeners {
         let store = store.clone();
+        let limiter = limiter.clone();
+
         tracing::info!("listening on {listener}");
 
         tokio::spawn(async move {
             match listener {
-                Listener::Tcp(tcp) => loop {
-                    let Ok((stream, addr)) = tcp.accept().await else {
-                        tracing::error!("failed to accept");
-                        return;
-                    };
-                    let store = store.clone();
+                Listener::Tcp(tcp) => {
+                    accept_loop(tcp, store, limiter, |addr| addr.to_string()).await;
+                }
 
-                    tracing::info!(%addr, "client connected");
-
-                    tokio::spawn(async move {
-                        let span = tracing::info_span!("conn", %addr);
-
-                        let result = server::handle_connection(stream, store)
-                            .instrument(span)
-                            .await;
-
-                        if let Err(err) = result {
-                            tracing::warn!(%addr, error = %err, "connection error");
-                        }
-
-                        tracing::info!(%addr, "client disconnected");
-                    });
-                },
-
-                Listener::Udp(socket) => {}
+                Listener::Udp(_socket) => {
+                    // UDP ist verbindungslos – kein Connection-Tracking
+                    // später: UDP-Handler
+                }
 
                 Listener::Unix(unix) => {
-                    let Ok((stream, _)) = unix.accept().await else {
-                        tracing::error!("failed to accept unix connection");
-                        return;
-                    };
-
-                    let store = store.clone();
-
-                    tokio::spawn(async move {
-                        let span = tracing::info_span!("conn");
-
-                        let result = server::handle_connection(stream, store)
-                            .instrument(span)
-                            .await;
-
-                        if let Err(err) = result {
-                            tracing::warn!(error = %err, "connection error");
-                        }
-
-                        tracing::info!("client disconnected");
-                    });
+                    accept_loop(unix, store, limiter, |_| String::new()).await;
                 }
             }
         });
@@ -158,4 +133,55 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn accept_loop<L, F>(
+    listener: L,
+    store: Arc<Store>,
+    limiter: Arc<ConnectionLimiter>,
+    addr_fmt: F,
+) where
+    L: Accept,
+    F: Fn(L::Addr) -> String,
+{
+    loop {
+        limiter.wait_until_accepting().await;
+
+        let (stream, addr) = match listener.accept().await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!(error = %e, "accept failed");
+                continue;
+            }
+        };
+
+        let addr_str = addr_fmt(addr);
+        let guard = match limiter.try_acquire().await {
+            Some(guard) => guard,
+            None => {
+                tracing::warn!(addr = %addr_str, "connection rejected (max)");
+                continue;
+            }
+        };
+
+        tracing::info!(addr = %addr_str, "client connected");
+
+        let store = store.clone();
+        let span = tracing::info_span!("conn", addr = %addr_str);
+
+        tokio::spawn(
+            async move {
+                let _guard = guard;
+
+                let result = server::handle_connection(stream, store).await;
+
+                if let Err(err) = result {
+                    tracing::warn!(addr = %addr_str, error = %err, "connection error");
+                }
+
+                tracing::info!(addr = %addr_str, "client disconnected");
+            }
+            .instrument(span),
+        );
+    }
 }

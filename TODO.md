@@ -10,13 +10,6 @@
 
 ## Phase 0 — Projekt-Setup & Architektur-Grundgerüst
 
-- [ ] 0.1 Modulare Crate-Struktur anlegen (nicht alles in `main.rs`)
-  - `src/main.rs` — nur CLI-Parsing + Server-Boot
-  - `src/protocol/` — Parser/Serializer (text.rs, binary.rs, meta.rs)
-  - `src/store/` — Speicher-Backend (item.rs, slab.rs, lru.rs)
-  - `src/server/` — Connection-Handling, Threading
-  - `src/stats.rs` — Statistik-Sammler
-  - `src/config.rs` — Konfiguration/CLI-Args
 - [ ] 0.2 `tracing`/`log` statt `println!`/`eprintln!` einführen
   - `-v` / `-vv` / `-vvv` Verbose-Level (wie memcached)
 - [ ] 0.3 CLI-Argument-Parser (z. B. `clap`) für alle memcached-Flags
@@ -462,4 +455,3 @@ erfolgreich; Privileges gedropped.
    Rust `memcache`-crate) gegen memcrabd laufen lassen
 4. **Ab Phase 4:** Belastungstest (z. B. `memtier_benchmark`, `twemperf`) und
    Vergleich der `stats`-Output-Zeilen mit echtem memcached
-

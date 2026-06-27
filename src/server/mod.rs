@@ -1,6 +1,7 @@
 pub mod bind;
 pub mod command;
 pub mod connection;
+pub mod conns;
 pub mod frame;
 pub mod port;
 
@@ -19,7 +20,7 @@ use tokio::{
 };
 
 use crate::{
-    server::bind::{parse_listen, resolve},
+    server::bind::{InterfaceResolver, SystemResolver, parse_listen},
     store::Store,
 };
 
@@ -78,9 +79,10 @@ pub async fn get_listeners(ifaces: Vec<String>, port: u16, udp: bool) -> Result<
     }
 
     let bind_targets = parse_listen(ifaces);
+    let resolver = SystemResolver {};
 
     for target in bind_targets {
-        let target_addrs = resolve(&target).await;
+        let target_addrs = resolver.resolve(&target).await;
         for addr in target_addrs {
             addrs.push(addr)
         }
