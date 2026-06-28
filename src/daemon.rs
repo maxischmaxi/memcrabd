@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use nix::fcntl::{OFlag, open};
+use nix::sys::resource::{RLIM_INFINITY, Resource, getrlimit, setrlimit};
 use nix::sys::stat::Mode;
 use nix::unistd::{
     ForkResult, User, chdir, fork, geteuid, getuid, setgid, setgroups, setsid, setuid,
@@ -82,6 +83,24 @@ pub fn drop_privileges(username: &str) -> Result<()> {
     setgroups(&[]).map_err(|e| anyhow::anyhow!("failed to drop supplementary groups: {e}"))?;
     setgid(user.gid).map_err(|e| anyhow::anyhow!("setgid failed: {e}"))?;
     setuid(user.uid).map_err(|e| anyhow::anyhow!("setuid failed: {e}"))?;
+
+    Ok(())
+}
+
+pub fn enable_core_dumps() -> Result<()> {
+    let (_, hard) = getrlimit(Resource::RLIMIT_CORE)
+        .map_err(|e| anyhow::anyhow!("getrlimit RLIMIT_CORE failed: {e}"))?;
+    if setrlimit(Resource::RLIMIT_CORE, RLIM_INFINITY, RLIM_INFINITY).is_err() {
+        setrlimit(Resource::RLIMIT_CORE, hard, hard)
+            .map_err(|e| anyhow::anyhow!("setrlimit RLIMIT_CORE failed: {e}"))?;
+    }
+
+    let (soft, _) = getrlimit(Resource::RLIMIT_CORE)
+        .map_err(|e| anyhow::anyhow!("getrlimit RLIMIT_CORE verification failed: {e}"))?;
+
+    if soft == 0 {
+        anyhow::bail!("failed to ensure corefile creation (RLIMIT_CORE soft limit is 0");
+    }
 
     Ok(())
 }

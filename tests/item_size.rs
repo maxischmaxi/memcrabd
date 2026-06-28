@@ -6,5 +6,5 @@ async fn accepts_2m() {
         panic!("item size 2m should be valid");
     };
 
-    assert_eq!(size, 2_000_000);
+    assert_eq!(size, 2 * 1024 * 1024); // 2m = 2 MiB = 2_097_152
 }

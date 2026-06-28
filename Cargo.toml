@@ -14,7 +14,7 @@ clap = { version = "4.6.1", features = ["derive"]}
 dashmap = "6.2.1"
 getifs = "0.6.1"
 libc = "0.2.186"
-nix = { version = "0.31.3", features = ["process", "fs", "user"]}
+nix = { version = "0.31.3", features = ["process", "fs", "user", "resource"]}
 tokio = { version = "1.52.3", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "json"] }

@@ -26,6 +26,10 @@ fn main() -> Result<()> {
         std::process::exit(1);
     }
 
+    if args.core_dump {
+        memcrabd::daemon::enable_core_dumps()?;
+    }
+
     if !args.user.is_empty() {
         memcrabd::daemon::drop_privileges(&args.user)?;
     } else if args.daemonize {
@@ -38,7 +42,7 @@ fn main() -> Result<()> {
     }
 
     if args.daemonize {
-        memcrabd::daemon::daemonize(false, false)?;
+        memcrabd::daemon::daemonize(!args.core_dump, false)?;
     }
 
     if let Some(pid_path) = &args.pid_file {
